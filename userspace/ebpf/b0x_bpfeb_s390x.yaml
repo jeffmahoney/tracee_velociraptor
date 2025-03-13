@@ -10,4 +10,4 @@ tags: "s390x"
 output: "ab0x_s390x.go"
 custom:
   - files:
-      - "userspace/ebpf/ebpf_bpfel.o"
+      - "userspace/ebpf/ebpf_bpfeb.o"
