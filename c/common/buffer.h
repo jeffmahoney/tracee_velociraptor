@@ -245,6 +245,42 @@ statfunc int save_str_to_buf(args_buffer_t *buf, void *ptr, u8 index)
     return 0;
 }
 
+statfunc int save_user_str_to_buf(args_buffer_t *buf, void *ptr, u8 index)
+{
+    // Data saved to submit buf: [index][size][ ... string ... ]
+
+    if (buf->offset > ARGS_BUF_SIZE - 1)
+        return 0;
+
+    // Save argument index
+    buf->args[buf->offset] = index;
+
+    // Save offset at the specified index
+    buf->args_offset[index] = buf->offset;
+
+    // Satisfy verifier for probe read
+    if (buf->offset > ARGS_BUF_SIZE - (MAX_STRING_SIZE + 1 + sizeof(int)))
+        return 0;
+
+    // Read into buffer
+    int sz = bpf_probe_read_user_str(&(buf->args[buf->offset + 1 + sizeof(int)]),
+				     MAX_STRING_SIZE, ptr);
+    if (sz > 0) {
+        barrier();
+        // Satisfy verifier for probe read
+        if (buf->offset > ARGS_BUF_SIZE - (MAX_STRING_SIZE + 1 + sizeof(int)))
+            return 0;
+
+        __builtin_memcpy(&(buf->args[buf->offset + 1]), &sz, sizeof(int));
+        buf->offset += sz + sizeof(int) + 1;
+        buf->argnum++;
+        return 1;
+    }
+
+    return 0;
+}
+
+
 statfunc int
 add_u64_elements_to_buf(args_buffer_t *buf, const u64 __user *ptr, int len, volatile u32 count_off)
 {
@@ -305,7 +341,12 @@ statfunc int save_u64_arr_to_buf(args_buffer_t *buf, const u64 *ptr, int len, u8
     return 1;
 }
 
-statfunc int save_str_arr_to_buf(args_buffer_t *buf, const char __user *const __user *ptr, u8 index)
+typedef long (* const bpf_probe_read_fn)(void *dst, __u32 size, const void *unsafe_ptr);
+typedef long (* const bpf_probe_read_str_fn)(void *dst, __u32 size, const void *unsafe_ptr);
+
+statfunc int __save_str_arr_to_buf(args_buffer_t *buf, const char *const *ptr, u8 index,
+				   bpf_probe_read_fn bpf_probe_read_cb,
+				   bpf_probe_read_str_fn bpf_probe_read_str_cb)
 {
     // Data saved to submit buf: [index][string count][str1 size][str1][str2 size][str2]...
 
@@ -324,7 +365,7 @@ statfunc int save_str_arr_to_buf(args_buffer_t *buf, const char __user *const __
 #pragma unroll
     for (int i = 0; i < MAX_STR_ARR_ELEM; i++) {
         const char *argp = NULL;
-        bpf_probe_read(&argp, sizeof(argp), &ptr[i]);
+        bpf_probe_read_cb(&argp, sizeof(argp), &ptr[i]);
         if (!argp)
             goto out;
 
@@ -333,7 +374,7 @@ statfunc int save_str_arr_to_buf(args_buffer_t *buf, const char __user *const __
             goto out;
 
         // Read into buffer
-        int sz = bpf_probe_read_str(&(buf->args[buf->offset + sizeof(int)]), MAX_STRING_SIZE, argp);
+        int sz = bpf_probe_read_str_cb(&(buf->args[buf->offset + sizeof(int)]), MAX_STRING_SIZE, argp);
         if (sz > 0) {
             if (buf->offset > ARGS_BUF_SIZE - sizeof(int))
                 // Satisfy validator
@@ -353,12 +394,12 @@ statfunc int save_str_arr_to_buf(args_buffer_t *buf, const char __user *const __
         goto out;
 
     // Read into buffer
-    int sz = bpf_probe_read_str(buf->args+buf->offset + sizeof(int), MAX_STRING_SIZE, ellipsis);
+    int sz = bpf_probe_read_str_cb(buf->args+buf->offset + sizeof(int), MAX_STRING_SIZE, ellipsis);
     if (sz > 0) {
         if (buf->offset > ARGS_BUF_SIZE - sizeof(int))
             // Satisfy validator
             goto out;
-        bpf_probe_read(&(buf->args[buf->offset]), sizeof(int), &sz);
+        bpf_probe_read_cb(&(buf->args[buf->offset]), sizeof(int), &sz);
         buf->offset += sz + sizeof(int);
         elem_num++;
     }
@@ -370,6 +411,17 @@ out:
     buf->argnum++;
     return 1;
 }
+
+statfunc int save_str_arr_to_buf(args_buffer_t *buf, const char *const *ptr, u8 index)
+{
+	return __save_str_arr_to_buf(buf, ptr, index, bpf_probe_read, bpf_probe_read_str);
+}
+
+statfunc int save_user_str_arr_to_buf(args_buffer_t *buf, const char *const *ptr, u8 index)
+{
+	return __save_str_arr_to_buf(buf, ptr, index, bpf_probe_read_user, bpf_probe_read_user_str);
+}
+
 
 #define MAX_ARR_LEN 8192
 
