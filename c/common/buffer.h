@@ -81,7 +81,7 @@ statfunc int reverse_string(char *dst, char *src, int src_off, int len)
     return i + 1;
 }
 
-statfunc int save_to_submit_buf(args_buffer_t *buf, void *ptr, u32 size, u8 index)
+static int save_to_submit_buf(args_buffer_t *buf, void *ptr, u32 size, u8 index)
 {
     // Data saved to submit buf: [index][ ... buffer[size] ... ]
 
@@ -110,7 +110,7 @@ statfunc int save_to_submit_buf(args_buffer_t *buf, void *ptr, u32 size, u8 inde
     return 0;
 }
 
-statfunc int save_bytes_to_buf(args_buffer_t *buf, void *ptr, u32 size, u8 index)
+static int save_bytes_to_buf(args_buffer_t *buf, void *ptr, u32 size, u8 index)
 {
     // Data saved to submit buf: [index][size][ ... bytes ... ]
 
@@ -370,7 +370,7 @@ statfunc int __save_str_arr_to_buf(args_buffer_t *buf, const char *const *ptr, u
         goto out;
 
     // Read into buffer
-    int sz = bpf_probe_read_str_cb(&(buf->args[buf->offset + sizeof(int)]), MAX_STRING_SIZE, ellipsis);
+    int sz = bpf_probe_read_str_cb(buf->args+buf->offset + sizeof(int), MAX_STRING_SIZE, ellipsis);
     if (sz > 0) {
         if (buf->offset > ARGS_BUF_SIZE - sizeof(int))
             // Satisfy validator

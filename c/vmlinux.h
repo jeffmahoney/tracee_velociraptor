@@ -129,6 +129,128 @@ struct pt_regs {
     u64 exit_rcu;
 };
 
+#elif defined(__TARGET_ARCH_powerpc)
+
+struct thread_info {
+	unsigned long flags;
+};
+
+struct user_pt_regs
+{
+        unsigned long gpr[32];
+        unsigned long nip;
+        unsigned long msr;
+        unsigned long orig_gpr3;
+        unsigned long ctr;
+        unsigned long link;
+        unsigned long xer;
+        unsigned long ccr;
+        unsigned long softe;
+        unsigned long trap;
+        unsigned long dar;
+        unsigned long dsisr;
+        unsigned long result;
+};
+
+struct pt_regs
+{
+        union {
+                struct user_pt_regs user_regs;
+                struct {
+                        unsigned long gpr[32];
+                        unsigned long nip;
+                        unsigned long msr;
+                        unsigned long orig_gpr3;
+                        unsigned long ctr;
+                        unsigned long link;
+                        unsigned long xer;
+                        unsigned long ccr;
+                        unsigned long softe;
+                        unsigned long trap;
+                        union {
+                                unsigned long dar;
+                                unsigned long dear;
+                        };
+                        union {
+                                unsigned long dsisr;
+                                unsigned long esr;
+                        };
+                        unsigned long result;
+                };
+        };
+        union {
+                struct {
+                        unsigned long ppr;
+                        unsigned long exit_result;
+                        union {
+                                unsigned long kuap;
+                                unsigned long amr;
+                        };
+                        unsigned long iamr;
+                };
+                unsigned long __pad[4];
+        };
+};
+
+#elif defined(__TARGET_ARCH_s390)
+
+struct thread_info {
+        unsigned long flags;
+};
+
+struct psw {
+	unsigned long mask;
+	unsigned long addr;
+} __attribute__ ((aligned(8)));
+
+typedef struct user_pt_regs {
+        unsigned long args[1];
+        struct psw psw;
+        unsigned long gprs[16];
+} user_pt_regs;
+
+struct subchannel_id {
+        __u32 cssid : 8;
+        __u32 : 4;
+        __u32 m : 1;
+        __u32 ssid : 2;
+        __u32 one : 1;
+        __u32 sch_no : 16;
+} __attribute__ ((packed, aligned(4)));
+
+struct tpi_info {
+        struct subchannel_id schid;
+        u32 intparm;
+        u32 adapter_IO:1;
+        u32 directed_irq:1;
+        u32 isc:3;
+        u32 :12;
+        u32 type:3;
+        u32 :12;
+} __attribute__ ((packed, aligned(4)));
+
+struct pt_regs {
+        union {
+                struct user_pt_regs user_regs;
+                struct {
+                        unsigned long args[1];
+                        struct psw psw;
+                        unsigned long gprs[16];
+                };
+        };
+        unsigned long orig_gpr2;
+        union {
+                struct {
+                        unsigned int int_code;
+                        unsigned int int_parm;
+                        unsigned long int_parm_long;
+                };
+                struct tpi_info tpi_info;
+        };
+        unsigned long flags;
+        unsigned long cr1;
+        unsigned long last_break;
+};
 #endif
 
 // common to all architectures
@@ -274,6 +396,17 @@ struct cpu_context {
 
 struct thread_struct {
     struct cpu_context cpu_context;
+};
+
+#elif defined(__TARGET_ARCH_powerpc)
+struct thread_struct {
+	unsigned long ksp;
+};
+
+#elif defined(__TARGET_ARCH_s390)
+struct thread_struct {
+	unsigned int acrs[16];
+	unsigned long ksp;
 };
 
 #endif
