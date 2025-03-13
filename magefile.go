@@ -153,7 +153,7 @@ func (self *Builder) fixAssets() error {
 			return err
 		}
 	} else if runtime.GOARCH == "s390x" {
-		err := fileb0x("userspace/ebpf/b0x_bpfel_s390x.yaml")
+		err := fileb0x("userspace/ebpf/b0x_bpfeb_s390x.yaml")
 		if err != nil {
 			return err
 		}
