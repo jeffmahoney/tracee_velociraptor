@@ -382,6 +382,7 @@ int syscall__execve_enter(void *ctx)
 
     save_str_to_buf(&p.event->args_buf, (void *) sys->args.args[0] /*filename*/, 0);
     save_str_arr_to_buf(&p.event->args_buf, (const char *const *) sys->args.args[1] /*argv*/, 1);
+
     if (p.config->options & OPT_EXEC_ENV) {
         save_str_arr_to_buf(
             &p.event->args_buf, (const char *const *) sys->args.args[2] /*envp*/, 2);
@@ -582,6 +583,12 @@ statfunc void update_thread_stack(void *ctx, task_info_t *task_info, struct task
 #elif defined(bpf_target_arm64)
     struct pt_regs *thread_regs = (struct pt_regs *) BPF_CORE_READ(task, thread.cpu_context.sp);
     u64 thread_sp = BPF_CORE_READ(thread_regs, sp);
+#elif defined(bpf_target_powerpc) // XXXJEFFM
+    struct pt_regs *thread_regs = (struct pt_regs *) BPF_CORE_READ(task, thread.ksp);
+    u64 thread_sp = BPF_CORE_READ(thread_regs, gpr[1]);
+#elif defined(bpf_target_s390) // XXXJEFFM
+    struct pt_regs *thread_regs = (struct pt_regs *) BPF_CORE_READ(task, thread.ksp);
+    u64 thread_sp = BPF_CORE_READ(thread_regs, gprs[15]);
 #else
     #error Unsupported architecture
 #endif
@@ -840,7 +847,7 @@ bool hidden_old_mod_scan_done = false;
 #define MOD_HIDDEN                     1
 #define MOD_NOT_HIDDEN                 0
 
-void __always_inline lkm_seeker_send_to_userspace(struct module *mod, u32 *flags, program_data_t *p)
+static void lkm_seeker_send_to_userspace(struct module *mod, u32 *flags, program_data_t *p)
 {
     // since this function can be called in a loop, we need to reset the buffer.
     // it is the responsibility of the caller, however, to set program_data to
@@ -1122,6 +1129,7 @@ statfunc int check_is_proc_modules_hooked(program_data_t *p)
     char modules_sym[8] = "modules";
     struct list_head *head = (struct list_head *) get_symbol_addr(modules_sym);
     u32 flags = PROC_MODULES | HIDDEN_MODULE;
+    bool has_mem = bpf_core_field_exists(pos->mem); // Version >= v6.4
 
     pos = list_first_entry_ebpf(head, typeof(*pos), list);
     n = pos;
@@ -1136,7 +1144,7 @@ statfunc int check_is_proc_modules_hooked(program_data_t *p)
 
         // Check with the address being the start of the memory area, since
         // this is what is given from /proc/modules.
-        if (bpf_core_field_exists(pos->mem)) { // Version >= v6.4
+        if (has_mem) {
             mod_base_addr = (u64) BPF_CORE_READ(pos, mem[MOD_TEXT].base);
         } else {
             struct module___older_v64 *old_mod = (void *) pos;
@@ -1162,7 +1170,7 @@ statfunc int check_is_proc_modules_hooked(program_data_t *p)
             }
 
             // Module was not seen in proc modules and there was no recent insertion, report.
-            lkm_seeker_send_to_userspace(pos, &flags, p);
+//            lkm_seeker_send_to_userspace(pos, &flags, p);
         }
     }
 
@@ -1197,12 +1205,20 @@ int uprobe_lkm_seeker_submitter(struct pt_regs *ctx)
     u64 mod_address = 0;
     u64 received_flags = 0;
 
+    // The "real" first argument refers to the instance associated with the call.
+
 #if defined(bpf_target_x86)
     mod_address = ctx->bx;    // 1st arg
     received_flags = ctx->cx; // 2nd arg
 #elif defined(bpf_target_arm64)
     mod_address = ctx->user_regs.regs[1];    // 1st arg
     received_flags = ctx->user_regs.regs[2]; // 2nd arg
+#elif defined(bpf_target_powerpc)
+    mod_address = ctx->user_regs.gpr[3];    // 1st arg
+    received_flags = ctx->user_regs.gpr[4]; // 2nd arg
+#elif defined(bpf_target_s390)
+    mod_address = ctx->user_regs.gprs[3];    // 1st arg
+    received_flags = ctx->user_regs.gprs[4]; // 2nd arg
 #else
     return 0;
 #endif
@@ -1800,7 +1816,12 @@ int uprobe_seq_ops_trigger(struct pt_regs *ctx)
     #elif defined(bpf_target_arm64)
         caller_ctx_id = ctx->user_regs.regs[1]; // 1st arg
         address_array = ((void *) ctx->sp + 8); // 2nd arg
-
+    #elif defined(bpf_target_powerpc) // XXXJEFFM
+        caller_ctx_id = ctx->user_regs.gpr[3]; // 1st arg
+        address_array = ((void *) ctx->user_regs.gpr[31] + 8); // 2nd arg
+    #elif defined(bpf_target_s390) // XXXJEFFM
+        caller_ctx_id = ctx->user_regs.gprs[3]; // 1st arg
+        address_array = ((void *) ctx->gprs[15] + 8); // 2nd arg
     #else
         return 0;
     #endif
@@ -1882,6 +1903,14 @@ int uprobe_mem_dump_trigger(struct pt_regs *ctx)
     address = ctx->user_regs.regs[1];        // 1st arg
     size = ctx->user_regs.regs[2];           // 2nd arg
     caller_ctx_id = ctx->user_regs.regs[3];  // 3rd arg
+#elif defined(bpf_target_powerpc) // XXXJEFFM
+    address = ctx->user_regs.gpr[3];        // 1st arg
+    size = ctx->user_regs.gpr[4];           // 2nd arg
+    caller_ctx_id = ctx->user_regs.gpr[5];  // 3rd arg
+#elif defined(bpf_target_s390) // XXXJEFFM
+    address = ctx->user_regs.gprs[3];        // 1st arg
+    size = ctx->user_regs.gprs[4];           // 2nd arg
+    caller_ctx_id = ctx->user_regs.gprs[5];  // 3rd arg
 #else
     return 0;
 #endif
@@ -2756,7 +2785,7 @@ int BPF_KPROBE(trace_security_socket_listen)
         case SYSCALL_LISTEN:
             save_to_submit_buf(&p.event->args_buf, (void *) &sys->args.args[0], sizeof(u32), 0);
             break;
-#if defined(bpf_target_x86) // armhf makes use of SYSCALL_LISTEN
+#ifdef ARCH_HAS_SOCKETCALL
         case SYSCALL_SOCKETCALL:
             save_to_submit_buf(&p.event->args_buf, (void *) sys->args.args[1], sizeof(u32), 0);
             break;
@@ -2826,12 +2855,14 @@ int BPF_KPROBE(trace_security_socket_connect)
             sockfd = get_syscall_arg1(p.event->task, task_regs, false);
             stsb(args_buf, &sockfd, sizeof(int), 0);
             break;
+#ifdef ARCH_HAS_SOCKETCALL
         case SYSCALL_SOCKETCALL:
             arr_addr = (void *) get_syscall_arg2(p.event->task, task_regs, false);
             // fd is the first entry in the array
             bpf_probe_read_user(&sockfd, sizeof(int), arr_addr);
             stsb(args_buf, &sockfd, sizeof(int), 0);
             break;
+#endif
     }
 
     // Save the socket type argument to the event.
@@ -2856,7 +2887,7 @@ int BPF_KPROBE(trace_security_socket_connect)
             break;
     }
 
-#if defined(bpf_target_x86)
+#if !defined(bpf_target_arm64)
     if (need_workaround) {
         // Workaround for sockaddr_un struct length (issue: #1129).
         struct sockaddr_un sockaddr = {0};
@@ -2908,7 +2939,7 @@ int BPF_KPROBE(trace_security_socket_accept)
             sockfd = get_syscall_arg1(p.event->task, task_regs, false);
             save_to_submit_buf(&p.event->args_buf, (void *) &sockfd, sizeof(int), 0);
             break;
-#if defined(bpf_target_x86) // armhf makes use of SYSCALL_ACCEPT/4
+#ifdef ARCH_HAS_SOCKETCALL
         case SYSCALL_SOCKETCALL:
             sockfd = get_syscall_arg2(p.event->task, task_regs, false);
             save_to_submit_buf(&p.event->args_buf, (void *) &sockfd, sizeof(int), 0);
@@ -2937,7 +2968,7 @@ int BPF_KPROBE(trace_security_socket_bind)
     struct sock *sk = get_socket_sock(sock);
 
     struct sockaddr *address = (struct sockaddr *) PT_REGS_PARM2(ctx);
-#if defined(__TARGET_ARCH_x86) // TODO: issue: #1129
+#if !defined(bpf_target_arm64) // TODO: issue: #1129
     uint addr_len = (uint) PT_REGS_PARM3(ctx);
 #endif
 
@@ -2954,7 +2985,7 @@ int BPF_KPROBE(trace_security_socket_bind)
             sockfd = get_syscall_arg1(p.event->task, task_regs, false);
             save_to_submit_buf(&p.event->args_buf, (void *) &sockfd, sizeof(u32), 0);
             break;
-#if defined(bpf_target_x86) // armhf makes use of SYSCALL_BIND
+#ifdef ARCH_HAS_SOCKETCALL
         case SYSCALL_SOCKETCALL:
             sockfd_addr = get_syscall_arg2(p.event->task, task_regs, false);
             save_to_submit_buf(&p.event->args_buf, (void *) sockfd_addr, sizeof(u32), 0);
@@ -2990,7 +3021,7 @@ int BPF_KPROBE(trace_security_socket_bind)
             connect_id.port = BPF_CORE_READ(addr, sin6_port);
         }
     } else if (sa_fam == AF_UNIX) {
-#if defined(__TARGET_ARCH_x86) // TODO: this is broken in arm64 (issue: #1129)
+#if !defined(bpf_target_arm64) // TODO: this is broken in arm64 (issue: #1129)
         if (addr_len <= sizeof(struct sockaddr_un)) {
             struct sockaddr_un sockaddr = {};
             // NOTE(nadav.str): stack allocated, so runtime core size check is avoided
@@ -3028,7 +3059,7 @@ int BPF_KPROBE(trace_security_socket_setsockopt)
             sockfd = get_syscall_arg1(p.event->task, task_regs, false);
             save_to_submit_buf(&p.event->args_buf, (void *) &sockfd, sizeof(u32), 0);
             break;
-#if defined(bpf_target_x86) // armhf makes use of SYSCALL_SETSOCKOPT
+#ifdef ARCH_HAS_SOCKETCALL
         case SYSCALL_SOCKETCALL:
             sockfd_addr = get_syscall_arg2(p.event->task, task_regs, false);
             save_to_submit_buf(&p.event->args_buf, (void *) sockfd_addr, sizeof(u32), 0);
@@ -5479,6 +5510,9 @@ statfunc void check_stack_pivot(void *ctx, struct pt_regs *regs, u32 syscall)
         return;
 
     // Get stack pointer
+#ifdef __TARGET_ARCH_powerpc
+#define __PT_SP_REG gpr[1]
+#endif
     u64 sp = PT_REGS_SP_CORE(regs);
 
     // Find VMA which contains the stack pointer
