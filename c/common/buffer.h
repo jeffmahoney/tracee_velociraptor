@@ -25,6 +25,9 @@ statfunc int save_args_to_submit_buf(event_data_t *, args_t *);
 statfunc int events_perf_submit(program_data_t *, long);
 statfunc int signal_perf_submit(void *, controlplane_signal_t *);
 
+typedef long (* const bpf_probe_read_fn)(void *dst, __u32 size, const void *unsafe_ptr);
+typedef long (* const bpf_probe_read_str_fn)(void *dst, __u32 size, const void *unsafe_ptr);
+
 // FUNCTIONS
 
 statfunc buf_t *get_buf(int idx)
@@ -97,7 +100,7 @@ static int save_to_submit_buf(args_buffer_t *buf, void *ptr, u32 size, u8 index)
         return 0;
 
     // Read into buffer
-    if (bpf_probe_read(&(buf->args[buf->offset + 1]), size, ptr) == 0) {
+    if (bpf_probe_read_kernel(&(buf->args[buf->offset + 1]), size, ptr) == 0) {
         // We update offset only if all writes were successful
         buf->offset += size + 1;
         buf->argnum++;
@@ -124,7 +127,7 @@ static int save_bytes_to_buf(args_buffer_t *buf, void *ptr, u32 size, u8 index)
         return 0;
 
     // Save size to buffer
-    if (bpf_probe_read(&(buf->args[buf->offset + 1]), sizeof(int), &size) != 0) {
+    if (bpf_probe_read_kernel(&(buf->args[buf->offset + 1]), sizeof(int), &size) != 0) {
         return 0;
     }
 
@@ -132,7 +135,7 @@ static int save_bytes_to_buf(args_buffer_t *buf, void *ptr, u32 size, u8 index)
         return 0;
 
     // Read bytes into buffer
-    if (bpf_probe_read(&(buf->args[buf->offset + 1 + sizeof(int)]),
+    if (bpf_probe_read_kernel(&(buf->args[buf->offset + 1 + sizeof(int)]),
                        size & (MAX_BYTES_ARR_SIZE - 1),
                        ptr) == 0) {
         // We update offset only if all writes were successful
@@ -211,7 +214,8 @@ statfunc int load_str_from_buf(args_buffer_t *buf, char *str, u8 index, enum str
     return size;
 }
 
-statfunc int save_str_to_buf(args_buffer_t *buf, void *ptr, u8 index)
+statfunc int __save_str_to_buf(args_buffer_t *buf, void *ptr, u8 index,
+			       bpf_probe_read_str_fn bpf_probe_read_str_cb)
 {
     // Data saved to submit buf: [index][size][ ... string ... ]
 
@@ -229,7 +233,8 @@ statfunc int save_str_to_buf(args_buffer_t *buf, void *ptr, u8 index)
         return 0;
 
     // Read into buffer
-    int sz = bpf_probe_read_str(&(buf->args[buf->offset + 1 + sizeof(int)]), MAX_STRING_SIZE, ptr);
+    int sz = bpf_probe_read_str_cb(&(buf->args[buf->offset + 1 + sizeof(int)]),
+				   MAX_STRING_SIZE, ptr);
     if (sz > 0) {
         barrier();
         // Satisfy verifier for probe read
@@ -243,43 +248,17 @@ statfunc int save_str_to_buf(args_buffer_t *buf, void *ptr, u8 index)
     }
 
     return 0;
+}
+
+statfunc int save_str_to_buf(args_buffer_t *buf, void *ptr, u8 index)
+{
+	return __save_str_to_buf(buf, ptr, index, bpf_probe_read_kernel_str);
 }
 
 statfunc int save_user_str_to_buf(args_buffer_t *buf, void *ptr, u8 index)
 {
-    // Data saved to submit buf: [index][size][ ... string ... ]
-
-    if (buf->offset > ARGS_BUF_SIZE - 1)
-        return 0;
-
-    // Save argument index
-    buf->args[buf->offset] = index;
-
-    // Save offset at the specified index
-    buf->args_offset[index] = buf->offset;
-
-    // Satisfy verifier for probe read
-    if (buf->offset > ARGS_BUF_SIZE - (MAX_STRING_SIZE + 1 + sizeof(int)))
-        return 0;
-
-    // Read into buffer
-    int sz = bpf_probe_read_user_str(&(buf->args[buf->offset + 1 + sizeof(int)]),
-				     MAX_STRING_SIZE, ptr);
-    if (sz > 0) {
-        barrier();
-        // Satisfy verifier for probe read
-        if (buf->offset > ARGS_BUF_SIZE - (MAX_STRING_SIZE + 1 + sizeof(int)))
-            return 0;
-
-        __builtin_memcpy(&(buf->args[buf->offset + 1]), &sz, sizeof(int));
-        buf->offset += sz + sizeof(int) + 1;
-        buf->argnum++;
-        return 1;
-    }
-
-    return 0;
+	return __save_str_to_buf(buf, ptr, index, bpf_probe_read_user_str);
 }
-
 
 statfunc int
 add_u64_elements_to_buf(args_buffer_t *buf, const u64 __user *ptr, int len, volatile u32 count_off)
@@ -293,7 +272,7 @@ add_u64_elements_to_buf(args_buffer_t *buf, const u64 __user *ptr, int len, vola
         if (buf->offset > ARGS_BUF_SIZE - sizeof(u64))
             // not enough space - return
             goto out;
-        if (bpf_probe_read(addr, sizeof(u64), (void *) &ptr[i]) != 0)
+        if (bpf_probe_read_kernel(addr, sizeof(u64), (void *) &ptr[i]) != 0)
             goto out;
         elem_num++;
         buf->offset += sizeof(u64);
@@ -330,7 +309,7 @@ statfunc int save_u64_arr_to_buf(args_buffer_t *buf, const u64 *ptr, int len, u8
     if ((buf->offset + sizeof(index) + sizeof(restricted_len) > ARGS_BUF_SIZE - MAX_BYTES_ARR_SIZE))
         return 0;
 
-    if (bpf_probe_read(&(buf->args[buf->offset + sizeof(index) + sizeof(restricted_len)]),
+    if (bpf_probe_read_kernel(&(buf->args[buf->offset + sizeof(index) + sizeof(restricted_len)]),
                        total_size & (MAX_BYTES_ARR_SIZE - 1),
                        (void *) ptr) != 0)
         return 0;
@@ -340,9 +319,6 @@ statfunc int save_u64_arr_to_buf(args_buffer_t *buf, const u64 *ptr, int len, u8
 
     return 1;
 }
-
-typedef long (* const bpf_probe_read_fn)(void *dst, __u32 size, const void *unsafe_ptr);
-typedef long (* const bpf_probe_read_str_fn)(void *dst, __u32 size, const void *unsafe_ptr);
 
 statfunc int __save_str_arr_to_buf(args_buffer_t *buf, const char *const *ptr, u8 index,
 				   bpf_probe_read_fn bpf_probe_read_cb,
@@ -379,7 +355,7 @@ statfunc int __save_str_arr_to_buf(args_buffer_t *buf, const char *const *ptr, u
             if (buf->offset > ARGS_BUF_SIZE - sizeof(int))
                 // Satisfy validator
                 goto out;
-            bpf_probe_read(&(buf->args[buf->offset]), sizeof(int), &sz);
+            bpf_probe_read_cb(&(buf->args[buf->offset]), sizeof(int), &sz);
             buf->offset += sz + sizeof(int);
             elem_num++;
             continue;
@@ -414,7 +390,7 @@ out:
 
 statfunc int save_str_arr_to_buf(args_buffer_t *buf, const char *const *ptr, u8 index)
 {
-	return __save_str_arr_to_buf(buf, ptr, index, bpf_probe_read, bpf_probe_read_str);
+	return __save_str_arr_to_buf(buf, ptr, index, bpf_probe_read_kernel, bpf_probe_read_kernel_str);
 }
 
 statfunc int save_user_str_arr_to_buf(args_buffer_t *buf, const char *const *ptr, u8 index)
@@ -448,21 +424,21 @@ statfunc int save_args_str_arr_to_buf(
         return 0;
 
     // Save array length
-    bpf_probe_read(&(buf->args[buf->offset + 1]), sizeof(int), &len);
+    bpf_probe_read_kernel(&(buf->args[buf->offset + 1]), sizeof(int), &len);
 
     // Satisfy validator for probe read
     if ((buf->offset + 5) > ARGS_BUF_SIZE - sizeof(int))
         return 0;
 
     // Save number of arguments
-    bpf_probe_read(&(buf->args[buf->offset + 5]), sizeof(int), &elem_num);
+    bpf_probe_read_kernel(&(buf->args[buf->offset + 5]), sizeof(int), &elem_num);
 
     // Satisfy validator for probe read
     if ((buf->offset + 9) > ARGS_BUF_SIZE - MAX_ARR_LEN)
         return 0;
 
     // Read into buffer
-    if (bpf_probe_read(&(buf->args[buf->offset + 9]), len & (MAX_ARR_LEN - 1), start) == 0) {
+    if (bpf_probe_read_kernel(&(buf->args[buf->offset + 9]), len & (MAX_ARR_LEN - 1), start) == 0) {
         // We update offset only if all writes were successful
         buf->offset += len + 9;
         buf->argnum++;
@@ -592,7 +568,7 @@ statfunc int save_args_to_submit_buf(event_data_t *event, args_t *args)
                     goto save_arg;
                 }
 
-                bpf_probe_read(&family, sizeof(short), arg);
+                bpf_probe_read_kernel(&family, sizeof(short), arg);
                 switch (family) {
                     case AF_UNIX:
                         size = bpf_core_type_size(struct sockaddr_un);

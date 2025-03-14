@@ -2899,7 +2899,7 @@ int BPF_KPROBE(trace_security_socket_connect)
     if (need_workaround) {
         // Workaround for sockaddr_un struct length (issue: #1129).
         struct sockaddr_un sockaddr = {0};
-        bpf_probe_read(&sockaddr, (u32) addr_len, (void *) address);
+        bpf_probe_read_kernel(&sockaddr, (u32) addr_len, (void *) address);
         // NOTE(nadav.str): stack allocated, so runtime core size check is avoided
         stsb(args_buf, (void *) &sockaddr, sizeof(struct sockaddr_un), 2);
     }
@@ -3033,7 +3033,7 @@ int BPF_KPROBE(trace_security_socket_bind)
         if (addr_len <= sizeof(struct sockaddr_un)) {
             struct sockaddr_un sockaddr = {};
             // NOTE(nadav.str): stack allocated, so runtime core size check is avoided
-            bpf_probe_read(&sockaddr, addr_len, (void *) address);
+            bpf_probe_read_kernel(&sockaddr, addr_len, (void *) address);
             save_to_submit_buf(
                 &p.event->args_buf, (void *) &sockaddr, sizeof(struct sockaddr_un), 1);
         } else
@@ -3135,7 +3135,7 @@ statfunc u32 send_bin_helper(void *ctx, void *prog_array, int tail_call)
             // Handle the rest of write recursively
             bin_args->start_off += bin_args->full_size;
             struct iovec io_vec;
-            bpf_probe_read(&io_vec, sizeof(struct iovec), &bin_args->vec[bin_args->iov_idx]);
+            bpf_probe_read_kernel(&io_vec, sizeof(struct iovec), &bin_args->vec[bin_args->iov_idx]);
             bin_args->ptr = io_vec.iov_base;
             bin_args->full_size = io_vec.iov_len;
             bpf_tail_call(ctx, prog_array, tail_call);
@@ -3221,7 +3221,7 @@ statfunc u32 send_bin_helper(void *ctx, void *prog_array, int tail_call)
         // Handle the rest of write recursively
         bin_args->start_off += bin_args->full_size;
         struct iovec io_vec;
-        bpf_probe_read(&io_vec, sizeof(struct iovec), &bin_args->vec[bin_args->iov_idx]);
+        bpf_probe_read_kernel(&io_vec, sizeof(struct iovec), &bin_args->vec[bin_args->iov_idx]);
         bin_args->ptr = io_vec.iov_base;
         bin_args->full_size = io_vec.iov_len;
         bpf_tail_call(ctx, prog_array, tail_call);
