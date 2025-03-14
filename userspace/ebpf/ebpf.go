@@ -3,6 +3,7 @@ package ebpf
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -394,8 +395,9 @@ func (self *EBPFManager) loadEbpf() (err error) {
 		return
 	}
 
+	// XXX JEFFM
 	self.collection, err = ebpf.NewCollectionWithOptions(
-		self.spec, ebpf.CollectionOptions{})
+		self.spec, ebpf.CollectionOptions{Programs: ebpf.ProgramOptions{LogLevel: ebpf.LogLevelInstruction, LogDisabled: false}})
 	if err != nil {
 		return
 	}
@@ -466,6 +468,11 @@ func (self *EBPFManager) Watch(
 	if self.collection == nil {
 		err := self.loadEbpf()
 		if err != nil {
+			var verr *ebpf.VerifierError
+			if errors.As(err, &verr) {
+				fmt.Printf("%+v\n", verr)
+			}
+
 			self.listeners = nil
 			return nil, nil, err
 		}
