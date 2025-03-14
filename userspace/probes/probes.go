@@ -145,6 +145,10 @@ const (
 	ExecuteAtFinishedARM
 	ExecuteFinishedCompatARM
 	ExecuteAtFinishedCompatARM
+	ExecuteFinishedS390
+	ExecuteAtFinishedS390
+	ExecuteFinishedCompatS390
+	ExecuteAtFinishedCompatS390
 	SecurityTaskSetrlimit
 	SecuritySettime64
 	Ptrace
