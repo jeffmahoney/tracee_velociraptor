@@ -91,6 +91,30 @@ func (self *Builder) generate() error {
 			"--", "-I../../c/", "-D__TARGET_ARCH_arm64", "-DDEBUG_K",
 		)
 
+	} else if runtime.GOARCH == "s390x" {
+		return sh.RunWith(self.Env(), mg.GoCmd(), "run",
+			"github.com/cilium/ebpf/cmd/bpf2go",
+			"-type", "config_entry_t",
+			"-type", "event_context_t",
+			"-type", "event_config_t",
+			"-no-global-types",
+			"-target", "bpfeb",
+			"ebpf", "../../c/tracee.bpf.c",
+			"--", "-I../../c/", "-D__TARGET_ARCH_s390", "-DDEBUG_K",
+		)
+
+	} else if runtime.GOARCH == "ppc64le" {
+		return sh.RunWith(self.Env(), mg.GoCmd(), "run",
+			"github.com/cilium/ebpf/cmd/bpf2go",
+			"-type", "config_entry_t",
+			"-type", "event_context_t",
+			"-type", "event_config_t",
+			"-no-global-types",
+			"-target", "bpfel",
+			"ebpf", "../../c/tracee.bpf.c",
+			"--", "-I../../c/", "-D__TARGET_ARCH_powerpc", "-DDEBUG_K",
+		)
+
 	} else {
 		panic("Architecture not supported!")
 	}
@@ -125,6 +149,26 @@ func (self *Builder) fixAssets() error {
 		}
 
 		err = replace_string_in_file("userspace/ebpf/ab0x_arm64.go", "func init()", "func Init()")
+		if err != nil {
+			return err
+		}
+	} else if runtime.GOARCH == "s390x" {
+		err := fileb0x("userspace/ebpf/b0x_bpfeb_s390x.yaml")
+		if err != nil {
+			return err
+		}
+
+		err = replace_string_in_file("userspace/ebpf/ab0x_s390x.go", "func init()", "func Init()")
+		if err != nil {
+			return err
+		}
+	} else if runtime.GOARCH == "ppc64le" {
+		err := fileb0x("userspace/ebpf/b0x_bpfel_ppc64le.yaml")
+		if err != nil {
+			return err
+		}
+
+		err = replace_string_in_file("userspace/ebpf/ab0x_ppc64le.go", "func init()", "func Init()")
 		if err != nil {
 			return err
 		}
